@@ -416,7 +416,7 @@ class C3Ghost(C3):
         """Initialize 'SPP' module with various pooling sizes for spatial pyramid pooling."""
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(MobileNetV3ResidualBlock(2 * self.c, (2 + n) * self.c, self.c, 3, 1, use_se=True, use_hs=True) for _ in range(n))
+        self.m = nn.Sequential(*(GhostBottleneck(c_, c_) for _ in range(n)))
 
 
 class GhostBottleneck(nn.Module):
