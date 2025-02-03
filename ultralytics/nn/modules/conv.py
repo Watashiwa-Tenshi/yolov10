@@ -6,6 +6,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 __all__ = (
     "Conv",
@@ -21,6 +22,11 @@ __all__ = (
     "CBAM",
     "Concat",
     "RepConv",
+    "MobileOneBlock",
+    "DepthwiseSeparableConv",
+    "ConvBnHswish",
+    "MobileNetV3ResidualBlock",
+    "ConvBnHswish"
 )
 
 
@@ -105,6 +111,22 @@ class DWConv(Conv):
         """Initialize Depth-wise convolution with given parameters."""
         super().__init__(c1, c2, k, s, g=math.gcd(c1, c2), d=d, act=act)
 
+class DepthwiseSeparableConv(nn.Module):
+    def __init__(self, c1, c2, k=1, s=1, act=True):
+        """Initialize Depth-wise separable convolution with given parameters."""
+        super().__init__()
+        self.depthwise_conv = nn.Conv2d(c1, c1, k, s, k // 2, groups=c1, bias=False)
+        self.pointwise_conv = nn.Conv2d(c1, c2, 1, 1, 0, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = nn.SiLU() if act else nn.Identity()
+
+    def forward(self, x):
+        """Apply depthwise separable convolution."""
+        x = self.depthwise_conv(x)
+        x = self.pointwise_conv(x)
+        x = self.bn(x)
+        return self.act(x)
+
 
 class DWConvTranspose2d(nn.ConvTranspose2d):
     """Depth-wise transpose convolution."""
@@ -171,6 +193,178 @@ class GhostConv(nn.Module):
         y = self.cv1(x)
         return torch.cat((y, self.cv2(y)), 1)
 
+class SeBlock(nn.Module):
+    def __init__(self, c1, reduction=4):
+        super().__init__()
+        self.Squeeze = nn.AdaptiveAvgPool2d(1)
+        self.Excitation = nn.Sequential()
+        self.Excitation.add_module('FC1', nn.Conv2d(c1, c1 // reduction, kernel_size=1)) 
+        self.Excitation.add_module('ReLU', nn.ReLU())
+        self.Excitation.add_module('FC2', nn.Conv2d(c1 // reduction, c1, kernel_size=1))
+        self.Excitation.add_module('Sigmoid', nn.Sigmoid())
+    def forward(self, x):
+        y = self.Squeeze(x)
+        ouput = self.Excitation(y)
+        return x*(ouput.expand_as(x))
+class ConvBnHswish(nn.Module):
+    """
+    This equals to
+    def conv_3x3_bn(inp, oup, stride):
+        return nn.Sequential(
+            nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
+            nn.BatchNorm2d(oup),
+            h_swish()
+        )
+    """
+    def __init__(self, c1, c2, s):
+        super(ConvBnHswish, self).__init__()
+        self.conv = nn.Conv2d(c1, c2, 3, s, 1, bias=False)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = nn.Hardswish()
+    def forward(self, x):
+        return self.act(self.bn(self.conv(x)))
+class MobileNetV3ResidualBlock(nn.Module):
+    def __init__(self, c1, c2, hidden_dim, k, s, use_se, use_hs):
+        super(MobileNetV3ResidualBlock, self).__init__()
+        assert s in [1, 2]
+        self.identity = s == 1 and c1 == c2
+        # a pointwise (1x1) convolution is used to reduce the number of input 
+        # channels to a smaller "hidden" dimension, which reduces computational 
+        # cost. This reduction is followed by a depthwise separable 
+        # convolution, which operates on this smaller set of channels. 
+        # Finally, another pointwise convolution is applied to expand the channels 
+        # back to the desired output size.
+        if c1 == hidden_dim:
+            self.conv = nn.Sequential(
+                # dw
+                Conv(hidden_dim, hidden_dim, k, s, (k - 1) // 2, hidden_dim, act=nn.Hardswish()),
+                # Squeeze-and-Excite
+                SeBlock(hidden_dim) if use_se else nn.Sequential(),
+                # pw-linear
+                Conv(hidden_dim, c2, 1, 1, None, act=False),
+            )
+        else:
+            self.conv = nn.Sequential(
+                # pw
+                Conv(c1, hidden_dim, 1, 1, None, act=nn.Hardswish()),
+                # dw
+                Conv(hidden_dim, hidden_dim, k, s, (k - 1) // 2,hidden_dim,  act=False),
+                # Squeeze-and-Excite
+                SeBlock(hidden_dim) if use_se else nn.Sequential(),
+                nn.Hardswish() if use_hs else nn.SiLU(),
+                # pw-linear
+                Conv(hidden_dim, c2, 1, 1, None, act=False),
+            )
+    def forward(self, x):
+        y = self.conv(x)
+        if self.identity:
+            return x + y
+        else:
+            return y
+
+def conv_bn(in_channels, out_channels, kernel_size, stride, padding, groups=1):
+    result = nn.Sequential()
+    result.add_module('conv', nn.Conv2d(in_channels=in_channels, out_channels=out_channels,
+                                                  kernel_size=kernel_size, stride=stride, padding=padding, groups=groups, bias=False))
+    result.add_module('bn', nn.BatchNorm2d(num_features=out_channels))
+    return result
+
+class DepthWiseConv(nn.Module):
+    def __init__(self, inc, kernel_size, stride=1):
+        super().__init__()
+        padding = 1
+        if kernel_size == 1:
+            padding = 0
+        # self.conv = nn.Sequential(
+        #     nn.Conv2d(inc, inc, kernel_size, stride, padding, groups=inc, bias=False,),
+        #     nn.BatchNorm2d(inc),
+        # )
+
+        self.conv = conv_bn(inc, inc,kernel_size, stride, padding, inc)
+    def forward(self, x):
+        return self.conv(x)
+    
+class PointWiseConv(nn.Module):
+    def __init__(self, inc, outc):
+        super().__init__()
+        
+        self.conv = conv_bn(inc, outc, 1, 1, 0)
+    def forward(self, x):
+        return self.conv(x)
+    
+class MobileOneBlock(nn.Module):
+  
+    def __init__(self, in_channels, out_channels, k,
+                 stride=1, dilation=1, padding_mode='zeros', deploy=False, use_se=False):
+        super(MobileOneBlock, self).__init__()
+        self.deploy = deploy
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.deploy = deploy
+        kernel_size = 3
+        padding = 1
+        assert kernel_size == 3
+        assert padding == 1
+        self.k = k
+        padding_11 = padding - kernel_size // 2
+        self.nonlinearity = nn.ReLU()
+
+        if use_se:
+            # self.se = SeBlock(out_channels, internal_neurons=out_channels // 16)
+            ...
+        else:
+            self.se = nn.Identity()
+        
+        if deploy:
+            self.dw_reparam = nn.Conv2d(in_channels=in_channels, out_channels=in_channels, kernel_size=kernel_size, stride=stride,
+                                      padding=padding, dilation=dilation, groups=in_channels, bias=True, padding_mode=padding_mode)
+            self.deploy_bn = nn.BatchNorm2d(in_channels)
+            self.pw_reparam = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=1, bias=True)
+        
+        else:
+            self.dw_bn_layer = nn.BatchNorm2d(in_channels) if out_channels == in_channels and stride == 1 else None
+            for k_idx in range(k):
+                setattr(self, f'dw_3x3_{k_idx}', 
+                    DepthWiseConv(in_channels, 3, stride=stride)
+                )
+            self.dw_1x1 = DepthWiseConv(in_channels, 1, stride=stride)
+            self.pw_bn_layer = nn.BatchNorm2d(in_channels) if out_channels == in_channels and stride == 1 else None
+            for k_idx in range(k):
+                setattr(self, f'pw_1x1_{k_idx}', 
+                    PointWiseConv(in_channels, out_channels)
+                )
+    def forward(self, inputs):
+        if self.deploy:
+            x = self.dw_reparam(inputs)
+            x = self.deploy_bn(x)
+            x = self.nonlinearity(x)
+            x = self.pw_reparam(x)
+            x = self.deploy_bn(x)
+            x = self.nonlinearity(x)
+            return x
+        if self.dw_bn_layer is None:
+            id_out = 0
+        else:
+            id_out = self.dw_bn_layer(inputs)
+        
+        x_conv_3x3 = []
+        for k_idx in range(self.k):
+            x = getattr(self, f'dw_3x3_{k_idx}')(inputs)
+            x_conv_3x3.append(x)
+        x_conv_1x1 = self.dw_1x1(inputs)
+        x = id_out + x_conv_1x1 + sum(x_conv_3x3)
+        x = self.nonlinearity(self.se(x))
+         # 1x1 conv # https://github.com/iscyy/yoloair
+        if self.pw_bn_layer is None:
+            id_out = 0
+        else:
+            id_out = self.pw_bn_layer(x)
+        x_conv_1x1 = []
+        for k_idx in range(self.k):
+            x_conv_1x1.append(getattr(self, f'pw_1x1_{k_idx}')(x))
+        x = id_out + sum(x_conv_1x1)
+        x = self.nonlinearity(x)
+        return x 
 
 class RepConv(nn.Module):
     """

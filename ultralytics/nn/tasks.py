@@ -53,7 +53,24 @@ from ultralytics.nn.modules import (
     PSA,
     SCDown,
     RepVGGDW,
-    v10Detect
+    v10Detect,
+    MobileOneBlock,
+    CBAM,
+    MobileOne,
+    C2fGhost,
+    SPPFGhost,
+    SPPFMobilenet,
+    C2fMobilenet,
+    DepthwiseSeparableConv,
+    ConvBnHswish,
+    RepNCSPELAN4,
+    ADown,
+    SPPELAN,
+    CBFuse,
+    CBLinear,
+    Silence,
+    C2fGhost_2,
+    GhostBottleneck_2,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -888,7 +905,20 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             RepC3,
             PSA,
             SCDown,
-            C2fCIB
+            C2fCIB,
+            MobileOneBlock,
+            MobileOne,
+            C2fGhost,
+            SPPFGhost,
+            DepthwiseSeparableConv,
+            SPPFMobilenet,
+            C2fMobilenet,
+            ConvBnHswish,
+            RepNCSPELAN4,
+            ADown,
+            SPPELAN,
+            GhostBottleneck_2,
+            C2fGhost_2
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
@@ -905,6 +935,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 n = 1
         elif m is AIFI:
             args = [ch[f], *args]
+        elif m is CBAM:
+            args = [ch[f], *args[0:]]
         elif m in {HGStem, HGBlock}:
             c1, cm, c2 = ch[f], args[0], args[1]
             args = [c1, cm, c2, *args[2:]]
@@ -917,6 +949,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
+        
         elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}:
             args.append([ch[x] for x in f])
             if m is Segment:
