@@ -49,7 +49,21 @@ from .block import (
     PSA,
     C2fCIB,
     SCDown,
-    RepVGGDW
+    RepVGGDW,
+    MobileOne,
+    C2fGhost,
+    SPPFGhost,
+    SPPFMobilenet,
+    C2fMobilenet,
+    DepthwiseSeparableConv,
+    RepNCSPELAN4,
+    ADown,
+    SPPELAN,
+    CBFuse,
+    CBLinear,
+    Silence,
+    C2fGhost_2,
+    GhostBottleneck_2,
 )
 from .conv import (
     CBAM,
@@ -65,6 +79,8 @@ from .conv import (
     LightConv,
     RepConv,
     SpatialAttention,
+    MobileOneBlock,
+    ConvBnHswish
 )
 from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
 from .transformer import (
@@ -143,5 +159,21 @@ __all__ = (
     "C2fCIB",
     "SCDown",
     "RepVGGDW",
-    "v10Detect"
+    "v10Detect",
+    "MobileOneBlock",
+    "MobileOne",
+    "C2fGhost",
+    "SPPFGhost",
+    "DepthwiseSeparableConv",
+    "SPPFMobilenet",
+    "C2fMobilenet",
+    "ConvBnHswish",
+    "RepNCSPELAN4",
+    "ADown",
+    "SPPELAN",
+    "CBFuse",
+    "CBLinear",
+    "Silence",
+    "C2fGhost_2",
+    "GhostBottleneck_2"
 )
